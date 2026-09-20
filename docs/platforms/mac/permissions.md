@@ -19,7 +19,7 @@ when you return to the app after changing a grant in System Settings, focus the
 Dashboard, or complete a permission request. Open Dashboard windows do not start
 background permission polling.
 
-Enabling camera access, Computer Control, Keep computer awake, the Peekaboo bridge, browser cookie
+Enabling camera access, Computer Control, Desktop sharing, Keep computer awake, the Peekaboo bridge, browser cookie
 sync, or continuous Voice Wake listening requires a native confirmation with
 **Cancel** selected by default. Increasing location access (from Off to While
 Using or Always, or from While Using to Always) and enabling precise location
