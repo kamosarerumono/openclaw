@@ -1,7 +1,7 @@
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
-import { DatabaseSync, StatementSync } from "node:sqlite";
+import { DatabaseSync } from "node:sqlite";
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import { createOperationalRunInstanceRef } from "../../agents/admitted-run-context.js";
 import { makeAgentAssistantMessage } from "../../agents/test-helpers/agent-message-fixtures.js";
@@ -172,57 +172,66 @@ it("projects the placement committed by a peer before reconciliation is read", (
     runId: "projection-peer-run",
   });
   store.markWorkspaceResultPending(claim);
-  expect(store.getProjectionFacts(active.sessionId).workspaceResultReconciling).toBe(true);
 
   // Stores reopen the cached handle by path. A separate connection models a peer commit.
   // This is fail's valid worker-owned active-to-failed transition, retaining pending results.
   const peer = new DatabaseSync(database.path);
-  const execute = StatementSync.prototype.get;
+  const prepare = database.db.prepare.bind(database.db);
+  const restoreReads: Array<() => void> = [];
   const recoveryError = "Peer placement failure";
+  let peerCommitEnabled = false;
   let peerCommits = 0;
   let changedRows: number | bigint = 0;
-  const statement = vi.spyOn(StatementSync.prototype, "get").mockImplementation(function (
-    this: StatementSync,
-    ...args: unknown[]
-  ) {
-    const result = Reflect.apply(execute, this, args);
-    if (
-      peerCommits === 0 &&
-      /\bfrom\s+"?worker_session_placement_moves\b/i.test(this.sourceSQL) &&
-      args.length === 1 &&
-      args[0] === active.sessionId
-    ) {
-      peerCommits++;
-      const updatedAtMs = Date.now();
-      changedRows = peer
-        .prepare(
-          `UPDATE worker_session_placements
+  const statement = vi.spyOn(database.db, "prepare").mockImplementation((sql) => {
+    const prepared = prepare(sql);
+    if (!/\bfrom\s+"?worker_session_placement_moves\b/i.test(sql)) {
+      return prepared;
+    }
+    const execute = prepared.get.bind(prepared);
+    const read = vi.spyOn(prepared, "get").mockImplementation((...args: unknown[]) => {
+      const result = Reflect.apply(execute, undefined, args);
+      if (
+        peerCommitEnabled &&
+        peerCommits === 0 &&
+        args.length === 1 &&
+        args[0] === active.sessionId
+      ) {
+        peerCommits++;
+        const updatedAtMs = Date.now();
+        changedRows = peer
+          .prepare(
+            `UPDATE worker_session_placements
            SET state = 'failed', transition_generation = ?, recovery_error = ?,
                terminal_reason = ?, terminal_at_ms = ?, turn_claim_owner = NULL,
                turn_claim_id = NULL, turn_claim_run_id = NULL, turn_claim_generation = NULL,
                turn_claim_owner_epoch = NULL, updated_at_ms = ?, state_changed_at_ms = ?
            WHERE session_id = ? AND state = 'active' AND transition_generation = ?
              AND turn_claim_owner = 'worker' AND turn_claim_id = ? AND turn_claim_run_id = ?`,
-        )
-        .run(
-          active.generation + 1,
-          recoveryError,
-          recoveryError,
-          updatedAtMs,
-          updatedAtMs,
-          updatedAtMs,
-          active.sessionId,
-          active.generation,
-          claim.claimId,
-          claim.runId,
-        ).changes;
-    }
-    return result;
+          )
+          .run(
+            active.generation + 1,
+            recoveryError,
+            recoveryError,
+            updatedAtMs,
+            updatedAtMs,
+            updatedAtMs,
+            active.sessionId,
+            active.generation,
+            claim.claimId,
+            claim.runId,
+          ).changes;
+      }
+      return result;
+    });
+    restoreReads.push(() => read.mockRestore());
+    return prepared;
   });
   try {
+    expect(store.getProjectionFacts(active.sessionId).workspaceResultReconciling).toBe(true);
+    peerCommitEnabled = true;
     const facts = store.getProjectionFacts(active.sessionId);
     expect(peerCommits).toBe(1);
-    expect(Number(changedRows)).toBe(1);
+    expect(changedRows).toBe(1);
     expect(facts).toMatchObject({
       placement: {
         state: "failed",
@@ -235,6 +244,9 @@ it("projects the placement committed by a peer before reconciliation is read", (
     });
   } finally {
     statement.mockRestore();
+    for (const restoreRead of restoreReads) {
+      restoreRead();
+    }
     peer.close();
   }
 });
