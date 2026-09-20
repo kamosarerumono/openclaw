@@ -563,7 +563,6 @@ export const reconcileTerminalArtifactDelivery = (entry: SubagentRunRecord): boo
     entry.suppressCompletionDelivery === true ||
     typeof entry.cleanupCompletedAt === "number" ||
     delivery?.status === "failed" ||
-    delivery?.status === "discarded" ||
     delivery?.status === "not_required" ||
     delivery?.disposition === "intentional_non_delivery";
   if (
@@ -573,6 +572,7 @@ export const reconcileTerminalArtifactDelivery = (entry: SubagentRunRecord): boo
     typeof entry.execution.endedAt !== "number" ||
     !hasArtifact ||
     delivery?.status === "delivered" ||
+    delivery?.status === "discarded" ||
     !wasTerminalized
   ) {
     return false;
