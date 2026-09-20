@@ -1,6 +1,12 @@
 import type { NativeDeviceSettingsSnapshot } from "../app/native-device-settings.ts";
 
-type MacDeviceSettingsSnapshot = NativeDeviceSettingsSnapshot & {
+type NativeDeviceSettingsWithLocation = NativeDeviceSettingsSnapshot & {
+  permissions: NativeDeviceSettingsSnapshot["permissions"] & {
+    location: NonNullable<NativeDeviceSettingsSnapshot["permissions"]["location"]>;
+  };
+};
+
+type MacDeviceSettingsSnapshot = NativeDeviceSettingsWithLocation & {
   app: NonNullable<NativeDeviceSettingsSnapshot["app"]>;
   capabilities: NonNullable<NativeDeviceSettingsSnapshot["capabilities"]>;
   browser: NonNullable<NativeDeviceSettingsSnapshot["browser"]>;
@@ -94,7 +100,7 @@ export function createNativeDeviceSettingsSnapshot(): MacDeviceSettingsSnapshot 
   };
 }
 
-export function createIosNativeDeviceSettingsSnapshot(): NativeDeviceSettingsSnapshot {
+export function createIosNativeDeviceSettingsSnapshot(): NativeDeviceSettingsWithLocation {
   return {
     contract: 1,
     device: {
@@ -135,4 +141,22 @@ export function createIosNativeDeviceSettingsSnapshot(): NativeDeviceSettingsSna
       speakerphoneEnabled: false,
     },
   };
+}
+
+export function createTauriDeviceSettingsSnapshot(platform: "linux" | "windows" | "macos") {
+  return {
+    contract: 1,
+    revision: 1,
+    device: {
+      platform,
+      formFactor: "desktop",
+      appVersion: "2026.9.3",
+      appBuild: "42",
+      profileName: null,
+    },
+    capabilities: { desktopSharingEnabled: true },
+    desktopSharing: { state: "running" },
+    permissions: { entries: [] },
+    voice: { supported: false, wakeEnabled: false },
+  } satisfies NativeDeviceSettingsSnapshot;
 }

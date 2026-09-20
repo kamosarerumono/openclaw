@@ -19,8 +19,9 @@ type PermissionId = z.infer<typeof permissionIdSchema>;
 const namedDevicesSchema = z.array(z.object({ id: z.string(), name: z.string() }));
 const nativeDeviceSettingsSnapshotSchema = z.object({
   contract: z.literal(1),
+  revision: z.number().int().nonnegative().optional(),
   device: z.object({
-    platform: z.enum(["macos", "ios"]),
+    platform: z.enum(["macos", "ios", "linux", "windows"]),
     formFactor: z.enum(["phone", "pad", "desktop"]).optional(),
     modelName: z.string().optional(),
     appVersion: z.string(), // CFBundleShortVersionString
@@ -60,6 +61,12 @@ const nativeDeviceSettingsSnapshotSchema = z.object({
     })
     .optional(),
   desktopAvailability: z.object({ state: z.enum(["locked", "unlocked", "unknown"]) }).optional(),
+  desktopSharing: z
+    .object({
+      state: z.enum(["off", "starting", "running", "error"]),
+      detail: z.string().optional(),
+    })
+    .optional(),
   browser: z
     .object({
       importAvailable: z.boolean(), // local mode with Chrome-family cookies available
@@ -83,11 +90,13 @@ const nativeDeviceSettingsSnapshotSchema = z.object({
         }),
       )
       .refine((entries) => new Set(entries.map((entry) => entry.id)).size === entries.length),
-    location: z.object({
-      mode: z.enum(["off", "whileUsing", "always"]),
-      precise: z.boolean(),
-      preciseEditable: z.boolean().optional(),
-    }),
+    location: z
+      .object({
+        mode: z.enum(["off", "whileUsing", "always"]),
+        precise: z.boolean(),
+        preciseEditable: z.boolean().optional(),
+      })
+      .optional(),
   }),
   voice: z.object({
     supported: z.boolean(), // voice wake runtime available on this device
@@ -251,15 +260,24 @@ export function createNativeDeviceSettingsCapability(): NativeDeviceSettingsCapa
   let snapshot = initial.success ? initial.data : null;
   let disposed = false;
   const listeners = new Set<(snapshot: NativeDeviceSettingsSnapshot) => void>();
+  const acceptSnapshot = (next: NativeDeviceSettingsSnapshot) => {
+    if (
+      snapshot?.revision !== undefined &&
+      (next.revision === undefined || next.revision <= snapshot.revision)
+    ) {
+      return false;
+    }
+    snapshot = next;
+    return true;
+  };
   const onChange = (event: Event) => {
     if (!(event instanceof CustomEvent)) {
       return;
     }
     const next = nativeDeviceSettingsSnapshotSchema.safeParse(event.detail);
-    if (!next.success) {
+    if (!next.success || !acceptSnapshot(next.data)) {
       return;
     }
-    snapshot = next.data;
     listeners.forEach((listener) => listener(next.data));
   };
   const send = async (message: NativeDeviceSettingsMessage, onSettled?: () => void) => {
@@ -273,7 +291,7 @@ export function createNativeDeviceSettingsCapability(): NativeDeviceSettingsCapa
         if (!result.success) {
           throw new Error("Native settings returned an invalid edit result");
         }
-        snapshot = result.data;
+        acceptSnapshot(result.data);
       }
     } catch (error) {
       console.warn("Native device settings request failed", error);
