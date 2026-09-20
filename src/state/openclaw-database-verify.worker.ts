@@ -1,4 +1,6 @@
+import fs from "node:fs";
 import { formatSqliteErrorCodeSuffix } from "../infra/sqlite-error-diagnostics.js";
+import { readSqliteIntegrityFileIdentity } from "../infra/sqlite-file-generation.js";
 import { OPENCLAW_SQLITE_BUSY_TIMEOUT_MS } from "./openclaw-state-db-contract.js";
 
 const DATABASE_VERIFY_CHILD_ARG = "--openclaw-database-verify-child";
@@ -7,6 +9,7 @@ export type OpenClawDatabaseVerifyTarget = {
   path: string;
   kind: "agent" | "state";
   label: string;
+  check?: "quick";
 };
 
 export type OpenClawDatabaseVerifyResult = {
@@ -14,6 +17,7 @@ export type OpenClawDatabaseVerifyResult = {
   ok: boolean;
   error?: string;
   terminal?: boolean;
+  identity?: string;
 };
 
 function isVerifyTarget(value: unknown): value is OpenClawDatabaseVerifyTarget {
@@ -24,7 +28,8 @@ function isVerifyTarget(value: unknown): value is OpenClawDatabaseVerifyTarget {
   return (
     typeof target.path === "string" &&
     (target.kind === "agent" || target.kind === "state") &&
-    typeof target.label === "string"
+    typeof target.label === "string" &&
+    (target.check === undefined || target.check === "quick")
   );
 }
 
@@ -36,15 +41,38 @@ function formatVerifyError(error: unknown): string {
 async function verifyOpenClawDatabase(
   target: OpenClawDatabaseVerifyTarget,
 ): Promise<OpenClawDatabaseVerifyResult> {
-  const [sqlite, integrity, location] = await Promise.all([
+  const [sqlite, integrity, location, source] = await Promise.all([
     import("../infra/node-sqlite.js"),
     import("../infra/sqlite-integrity.js"),
     import("../infra/sqlite-readonly-location.js"),
+    import("../infra/sqlite-source-handle.js"),
   ]);
   let cleanup: (() => Promise<boolean>) | undefined;
   let database: import("node:sqlite").DatabaseSync | undefined;
   let result = await (async (): Promise<OpenClawDatabaseVerifyResult> => {
     try {
+      if (target.check === "quick") {
+        const before = fs.statSync(target.path, { bigint: true });
+        const identity = source.withSqliteSourceReadDatabase(target.path, "source", (reader) => {
+          const opened = fs.statSync(target.path, { bigint: true });
+          // ctime detects replacement-and-restoration during native open. Once
+          // open is bound, the synchronous transaction retains that source.
+          if (
+            !opened.isFile() ||
+            before.dev !== opened.dev ||
+            before.ino !== opened.ino ||
+            before.ctimeNs !== opened.ctimeNs
+          ) {
+            throw new Error(`SQLite source changed during integrity admission: ${target.path}`);
+          }
+          reader.exec(`PRAGMA busy_timeout = ${OPENCLAW_SQLITE_BUSY_TIMEOUT_MS}; BEGIN;`);
+          integrity.assertSqliteIntegrity(reader, target.label, "quick_check");
+          reader.exec("ROLLBACK;");
+          readSqliteIntegrityFileIdentity(target.path, opened);
+          return `${opened.dev}:${opened.ino}`;
+        });
+        return { path: target.path, ok: true, identity };
+      }
       const prepared = await location.prepareSqliteReadOnlyLocationInProcess(target.path);
       cleanup = prepared.cleanupAsync;
       database = sqlite.openNodeSqliteDatabase(prepared.location, {

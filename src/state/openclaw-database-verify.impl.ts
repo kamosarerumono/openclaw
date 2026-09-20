@@ -16,15 +16,15 @@ import type {
   OpenClawDatabaseVerifyResult,
   OpenClawDatabaseVerifyTarget,
 } from "./openclaw-database-verify.worker.js";
-import { recordOpenClawDatabaseQuarantine } from "./openclaw-quarantine-store.js";
+import {
+  refreshOpenClawAgentIntegrityVerification,
+  recordOpenClawDatabaseQuarantine,
+} from "./openclaw-quarantine-store.js";
 import {
   confirmOpenClawStateDatabaseIntegrity,
   recordOpenClawStateDatabaseOpenFailure,
 } from "./openclaw-state-db.js";
 import { resolveOpenClawStateSqlitePath } from "./openclaw-state-db.paths.js";
-
-export const OPENCLAW_DATABASE_VERIFY_INITIAL_DELAY_MS = 5 * 60_000;
-export const OPENCLAW_DATABASE_VERIFY_INTERVAL_MS = 24 * 60 * 60_000;
 
 const log = createSubsystemLogger("state/database-verify");
 const DATABASE_VERIFY_CHILD_ARG = "--openclaw-database-verify-child";
@@ -38,7 +38,8 @@ function isVerifyResult(value: unknown): value is OpenClawDatabaseVerifyResult {
     typeof result.path === "string" &&
     typeof result.ok === "boolean" &&
     (result.error === undefined || typeof result.error === "string") &&
-    (result.terminal === undefined || typeof result.terminal === "boolean")
+    (result.terminal === undefined || typeof result.terminal === "boolean") &&
+    (result.identity === undefined || typeof result.identity === "string")
   );
 }
 
@@ -247,6 +248,16 @@ export async function applyOpenClawDatabaseVerificationResults(options: {
       continue;
     }
     if (result.ok) {
+      if (target.kind === "agent" && result.identity) {
+        try {
+          refreshOpenClawAgentIntegrityVerification(result.path, options.env, result.identity);
+        } catch (error) {
+          log.warn("failed to refresh database integrity verification record", {
+            path: result.path,
+            error: String(error),
+          });
+        }
+      }
       log.info("database integrity verification passed", {
         kind: target.kind,
         label: target.label,

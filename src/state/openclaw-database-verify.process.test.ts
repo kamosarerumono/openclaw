@@ -105,6 +105,47 @@ describe("database verifier child process entrypoint", () => {
   });
 });
 
+describe("database quick-check identity", () => {
+  afterEach(() => vi.restoreAllMocks());
+
+  it.skipIf(process.platform === "win32")(
+    "rejects replacement and restoration around native open before refreshing a receipt",
+    async () => {
+      const fixtureDir = tempDirs.make("openclaw-database-quick-identity-");
+      const databasePath = path.join(fixtureDir, "agent.sqlite");
+      const replacementPath = path.join(fixtureDir, "replacement.sqlite");
+      const archivePath = path.join(fixtureDir, "archive.sqlite");
+      for (const pathname of [databasePath, replacementPath]) {
+        const database = nodeSqlite.openNodeSqliteDatabase(pathname);
+        database.exec("CREATE TABLE records (value TEXT);");
+        database.close();
+      }
+      const open = nodeSqlite.openNodeSqliteDatabase;
+      vi.spyOn(nodeSqlite, "openNodeSqliteDatabase").mockImplementationOnce((pathname, options) => {
+        fs.renameSync(databasePath, archivePath);
+        fs.renameSync(replacementPath, databasePath);
+        const database = open(pathname, options);
+        fs.renameSync(databasePath, replacementPath);
+        fs.renameSync(archivePath, databasePath);
+        return database;
+      });
+
+      await expect(
+        verifyOpenClawDatabases([
+          { path: databasePath, kind: "agent", label: "synthetic agent", check: "quick" },
+        ]),
+      ).resolves.toEqual([
+        {
+          path: databasePath,
+          ok: false,
+          error: expect.stringContaining("SQLite source changed during integrity admission"),
+          terminal: false,
+        },
+      ]);
+    },
+  );
+});
+
 describe("database verifier worker lifetime", () => {
   function createWorkerFixture(): URL {
     const fixtureDir = tempDirs.make("openclaw-database-verify-lifetime-");
