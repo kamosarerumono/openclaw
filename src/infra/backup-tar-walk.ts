@@ -46,6 +46,10 @@ export async function* walkBackupTar(params: {
           await assertDirectory({ sourcePath, stat });
         } else if (stat.isSymbolicLink()) {
           linkpath = await fs.readlink(sourcePath);
+          // Match tar's Windows reader before the manifest and header share this target.
+          if (process.platform === "win32") {
+            linkpath = linkpath.replaceAll("\\", "/");
+          }
         } else if (stat.isFile()) {
           handle = await fs.open(sourcePath, constants.O_RDONLY | noFollow);
           const opened = await handle.stat();

@@ -1,8 +1,13 @@
+import { execFileSync } from "node:child_process";
 import fs from "node:fs/promises";
 import path from "node:path";
 import * as tar from "tar";
 import { afterEach, expect, it, vi } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
+import {
+  recordArchiveSymbolicLink,
+  type BackupSymbolicLink,
+} from "./backup-archive-path-policy.js";
 import { walkBackupTar } from "./backup-tar-walk.js";
 
 vi.mock("node:fs", async (importOriginal) => {
@@ -12,6 +17,75 @@ vi.mock("node:fs", async (importOriginal) => {
 
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 afterEach(() => vi.restoreAllMocks());
+
+it.each([
+  { encoding: "header", target: String.raw`C:\external\workspace` },
+  { encoding: "PAX", target: "C:\\external\\" + "workspace".repeat(15) },
+])("records Windows $encoding link targets matching tar readback", async ({ target }) => {
+  const source = path.join(tempDirs.make("backup-windows-link-"), "link");
+  await fs.symlink(target, source, process.platform === "win32" ? "junction" : "file");
+  const platform = vi.spyOn(process, "platform", "get").mockReturnValue("win32");
+  const manifestLinks: BackupSymbolicLink[] = [];
+  const chunks: Buffer[] = [];
+  try {
+    for await (const chunk of walkBackupTar({
+      tar,
+      paths: [source],
+      skip: () => false,
+      filter: () => true,
+      onEntry: (_source, header) => {
+        header.path = "backup/payload/state/link";
+        const { external, ...link } = recordArchiveSymbolicLink({
+          archiveRoot: "backup",
+          entryPath: header.path,
+          linkpath: header.linkpath,
+          platform: process.platform,
+          state: { sourcePath: "C:\\state", archivePath: "backup/payload/state" },
+          assets: [{ sourcePath: "C:\\state", archivePath: "backup/payload/state" }],
+          hasExternalLinkReport: true,
+        });
+        if (external) {
+          manifestLinks.push(link);
+        }
+      },
+      onVanished: () => {
+        throw new Error("unexpected missing entry");
+      },
+      onProgress: () => {},
+    })) {
+      chunks.push(chunk);
+    }
+  } finally {
+    platform.mockRestore();
+  }
+  // Tar captures its platform at import time; a fresh reader exercises its Windows mode.
+  const readback = execFileSync(
+    process.execPath,
+    [
+      "--input-type=module",
+      "-e",
+      `
+    import { Parser } from "tar";
+    const links = [];
+    const parser = new Parser({ onReadEntry(entry) {
+      links.push({ entryPath: entry.path, linkpath: entry.linkpath });
+      entry.resume();
+    }});
+    parser.on("end", () => process.stdout.write(JSON.stringify(links)));
+    process.stdin.pipe(parser);
+  `,
+    ],
+    {
+      input: Buffer.concat(chunks),
+      env: { ...process.env, TESTING_TAR_FAKE_PLATFORM: "win32" },
+      encoding: "utf8",
+    },
+  );
+  expect(JSON.parse(readback)).toEqual([
+    { entryPath: "backup/payload/state/link", linkpath: target.replaceAll("\\", "/") },
+  ]);
+  expect(manifestLinks).toEqual(JSON.parse(readback));
+});
 
 it
   .skipIf(process.platform === "win32")

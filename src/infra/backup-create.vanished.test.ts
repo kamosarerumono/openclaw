@@ -94,7 +94,7 @@ it("reports transient files in a second workspace and preserves its dangling abs
     const dangling = state.path("missing-target");
     const sourceLink = path.join(second, "dangling-link");
     await fs.symlink(dangling, sourceLink, process.platform === "win32" ? "junction" : "file");
-    const linkpath = await fs.readlink(sourceLink);
+    const linkpath = (await fs.readlink(sourceLink)).replaceAll(path.sep, "/");
     const result = await backupCreateCommand(createTestRuntime(), {
       output: state.path("backup.tar.gz"),
       verify: true,
