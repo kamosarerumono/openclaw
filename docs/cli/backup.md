@@ -343,21 +343,23 @@ history remain included in the backup.
 
 During archive creation, OpenClaw excludes known live-mutation paths before `tar` reads them. This avoids races between a file's recorded size and concurrent writes. The filter applies these state-relative rules under each backed-up state directory:
 
-| State-relative scope                         | Skipped entries                                       |
-| -------------------------------------------- | ----------------------------------------------------- |
-| `sessions/**`                                | `.jsonl`, `.log`                                      |
-| `agents/<agentId>/sessions/**`               | `.jsonl`, `.log`                                      |
-| `cron/runs/**`                               | `.jsonl`, `.log`                                      |
-| `logs/**`                                    | `.jsonl`, `.log`                                      |
-| `delivery-queue/**`                          | `.json`, `.delivered`, `.tmp`                         |
-| `session-delivery-queue/**`                  | `.json`, `.delivered`, `.tmp`                         |
-| `browser/<profile>/user-data/`               | `SingletonCookie`, `SingletonLock`, `SingletonSocket` |
-| `sandbox/skills-workspaces/**`               | All entries                                           |
-| Any path under the backed-up state directory | `.sock`, `.pid`, `.tmp`                               |
+| State-relative scope                          | Skipped entries                                       |
+| --------------------------------------------- | ----------------------------------------------------- |
+| `sessions/**`                                 | `.jsonl`, `.log`                                      |
+| `agents/<agentId>/sessions/**`                | `.jsonl`, `.log`                                      |
+| `cron/runs/**`                                | `.jsonl`, `.log`                                      |
+| `logs/**`                                     | `.jsonl`, `.log`                                      |
+| `delivery-queue/**`                           | `.json`, `.delivered`, `.tmp`                         |
+| `session-delivery-queue/**`                   | `.json`, `.delivered`, `.tmp`                         |
+| `browser/<profile>/user-data/`                | `SingletonCookie`, `SingletonLock`, `SingletonSocket` |
+| `sandbox/skills-workspaces/**`                | All entries                                           |
+| Any archived root, including agent workspaces | `.sock`, `.pid`, `.tmp`, and `.tmp.*`                 |
 
-The active config file remains included even when its name or location matches a rule above. This exception keeps only the selected config file; neighboring files under excluded directories stay out of the archive.
+Explicitly selected asset roots stay included even when their names match a transient filename rule. The active config file remains included even when its name or location matches a rule above. This exception keeps only the selected config file; neighboring files under excluded directories stay out of the archive.
 
-These rules do not filter workspace files outside the state directory. They also omit completed transcript and log files that match the table, so retain those records separately when needed. The JSON result's `skippedVolatileCount` reports intentionally omitted volatile entries; regenerable agent temporary roots are listed separately in `skipped` and are not included in that count.
+Transient filename rules apply across all selected roots, including every agent workspace. State-specific log, queue, and browser rules remain scoped to state. They also omit completed transcript and log files that match the table, so retain those records separately when needed. The JSON result's `skippedVolatileCount` reports intentionally omitted volatile entries, each listed in `skipped` with reason `volatile`; regenerable agent temporary roots are listed separately and are not included in that count.
+
+If an entry disappears during traversal or before it can be opened, the archive continues with the surviving entries. Each omitted path appears in the result's `skipped` list with reason `vanished`, and in the result's `warnings` and text summary. Required source roots and staged captures must still exist; permission and I/O errors still fail the archive. Changes that could redirect a read outside the selected roots also fail. Files are opened before their archive headers are written, so a vanished file cannot leave a partial entry.
 
 Chromium singleton entries coordinate one running browser on one host and are recreated when that profile starts; the rest of the profile's `user-data/` remains in the archive. Sandbox skills workspaces are generated copies of current skill sources and are materialized again when OpenClaw prepares the next sandbox context after restore; adjacent sandbox registry and other durable state remain included.
 
